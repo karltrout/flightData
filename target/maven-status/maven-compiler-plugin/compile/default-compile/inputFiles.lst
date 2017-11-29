@@ -1,3 +1,6 @@
 /data/java/flightData/src/main/java/FlightData.java
 /data/java/flightData/src/main/java/csv/CsvReader.java
 /data/java/flightData/src/main/java/graph/GraphAssent.java
+/data/java/flightData/src/main/java/TfmsFlowData.java
+/data/java/flightData/src/main/java/JDBCExample.java
+/data/java/flightData/src/main/java/TfmsFlowMessageSchema.java

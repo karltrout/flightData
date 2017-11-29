@@ -1,2 +1,4 @@
+TfmsFlowData.class
+TfmsFlowMessageSchema.class
 csv/CsvReader.class
 FlightData.class
