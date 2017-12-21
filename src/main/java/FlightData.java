@@ -1,7 +1,6 @@
 
-import static orAscensionspark.sql.functions.callUDF;
+import static org.apache.spark.sql.functions.callUDF;
 import static org.apache.spark.sql.functions.col;
-import static org.apache.spark.sql.functions.date_add;
 import static org.apache.spark.sql.functions.explode;
 import static org.apache.spark.sql.functions.max;
 import static org.apache.spark.sql.types.DataTypes.DoubleType;
@@ -14,14 +13,16 @@ import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SaveMode;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.api.java.UDF1;
 import org.apache.spark.sql.types.ArrayType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.StructType;
 import scala.collection.mutable.WrappedArray;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Calendar;
-
+import java.util.Properties;
 
 /**
  * just seeing what we can do...
@@ -30,93 +31,144 @@ import java.util.Calendar;
     > cd  /Users/karltrout/Documents/Development/java/flightData/target
     > /usr/local/spark/bin/spark-submit --class FlightData --master local[4] --jars ./*.jar ./flightData-1.0-SNAPSHOT.jar
  on YARN:
-    > /usr/local/spark/bin/spark-submit --class FlightData --master yarn --num-executors 3 --executor-cores 1 --jars ./*.jar ./flightData-1.0-SNAPSHOT.jar
+    > $SPARK_HOME/bin/spark-submit --class FlightData --master yarn --num-executors 4 --executor-cores 1 --jars ./*.jar ./flightData-1.0-SNAPSHOT.jar -p /data/java/flightData/src/main/resources/flightdata.properties
 
  */
 public class FlightData {
 
-  static Logger logger = Logger.getLogger(FlightData.class);
-  static String airport = "PHX";
-  //static String acType  = "A320";
-  static final String threadedTrack = "hdfs://Hadoop1/data/derived/tt/2.3.0-F/ThreadedTrack/";
-  static final String threadedFlight = "hdfs://Hadoop1/data/derived/tt/2.3.0-F/ThreadedFlight/";
-  static final String TT_FILE_NAME = "ThreadedTrack_2.3.0-F_ASSOCIATED*.avro";
-  static final String TF_FILE_NAME = "ThreadedFlight_2.3.0-F_ASSOCIATED*.avro";
+  private static Logger logger = Logger.getLogger(FlightData.class);
+  private static String outputType;
+  private static String rootSavePath;
+  private static String airport;
+  private static int inMONTH;
+  private static int inYEAR;
+  private static int inDAY;
+  private static String threadedTrack;
+  private static String threadedFlight;
+  private static String TT_FILE_NAME;
+  private static String TF_FILE_NAME;
+  private static Boolean LOCAL = false;
 
   /***
-   *
-   * @param args
+   * @param args as of now the Properties .config file path. -p /path/to/properties/file.
    */
   public static void main(String[] args) {
+
+    if (args.length < 2 || args[0].compareToIgnoreCase("-p") != 0) {
+      logger.info("given args : " + args[0] + " : " + args[1]);
+      logger.error("No properties file supplied.");
+      logger.info("Usage: FlightData -p /path/to/parameters.file.");
+      System.exit(0);
+    }
+
+    String propertiesFilePath = args[1];
+    assignFields(propertiesFilePath);
 
     SparkSession spark = SparkSession.builder().getOrCreate();
     init(spark);
 
-    int inMONTH = 06;
-    int inYEAR = 2017;
-    int inDAY = 01;
     Calendar processDateCalendar = Calendar.getInstance();
-    processDateCalendar.set(inYEAR, inMONTH, inDAY );
-    String datePath = String.format("%1$tY/%1$tm/%1$td/", processDateCalendar );
+    processDateCalendar.set(inYEAR, inMONTH, inDAY);
+    String datePath = String.format("%1$tY/%1$tm/%1$td/", processDateCalendar);
     logger.info("The processing date is : " + datePath);
 
-    String tfFile = "hdfs://localhost:9000/user/karltrout/DATA/03302017/TF/ThreadedFlight_2.3.0-F_ASSOCIATED_20170330_part-00072.avro";
-    //tfFile = threadedFlight + datePath + TF_FILE_NAME;
-    Dataset<Row> threadedFlightDataSet = spark.read().format("com.databricks.spark.avro").load( tfFile );
+    String tfFile = threadedFlight + datePath + TF_FILE_NAME;
+    logger.debug("###>>> THE PROD TF FILE PATH: " + tfFile);
+
+    if( LOCAL ) {
+      tfFile =
+          "hdfs://localhost:9000/user/karltrout/DATA/03302017/TF/ThreadedFlight_2.3.0-F_ASSOCIATED_20170330_part-00072.avro";
+    }
+
+    Dataset<Row> threadedFlightDataSet = spark.read().format("com.databricks.spark.avro").load(tfFile);
     DataFrameNaFunctions dataFrameNaFunctions = new DataFrameNaFunctions(threadedFlightDataSet);
     String[] nonNullColumns = {"threaded_metadata.departure_airport", "threaded_metadata.aircraft_type"};
     Dataset<Row> threadedFlightDS = dataFrameNaFunctions.drop(nonNullColumns);
 
-    String ttFile = "hdfs://localhost:9000/user/karltrout/DATA/03302017/TT/ThreadedTrack_2.3.0-F_ASSOCIATED_20170330_part-00072.avro";
-    //ttFile = threadedTrack + datePath + TT_FILE_NAME;
-    Dataset<Row> threadedTrackDataSet = spark.read().format("com.databricks.spark.avro").load( ttFile );
-    Dataset<Row> allFlightColumns = threadedFlightDS.join(threadedTrackDataSet, "tt_id"); //.filter("threaded_metadata.aircraft_id like 'AAL424%'");
+    String ttFile = threadedTrack + datePath + TT_FILE_NAME;
+    logger.debug("###>>> THE PROD TT FILE PATH: " + ttFile);
 
-        Dataset<Row>
-            flightData =
-            allFlightColumns.select(col("tt_id"),
-                                    col("threaded_track"),
-                                    col("threaded_metadata.aircraft_id").alias("acid"),
-                                    col("threaded_metadata.aircraft_type").alias("acType"),
-                                    col("threaded_metadata.departure_airport").alias("depArpt"))
-                .filter("threaded_metadata.departure_airport like '%" + airport + "%'");
-                //.filter("threaded_metadata.aircraft_type = '" + acType + "'");
-
-
-      Dataset<Row> reducedFlightData = flightData
-          .withColumn("Altitudes", callUDF("udfReduceHits", col("threaded_track")))
-          .select(
-              col("tt_id"),
-              col("acType"),
-              col("acid"),
-              col("depArpt"),
-              col("Altitudes"),
-             // col("Max")
-              explode(col("Altitudes"))
-          );
-
-
-      logger.info(reducedFlightData.schema().toString());
-      logger.info("ReducedFlightdata Size > " + reducedFlightData.count());
-
-      Dataset<Row> data = reducedFlightData.select(col("acid"),
-                                                   col("acType"),
-                                                   col("depArpt"),
-                                                   col("col.time"),
-                                                   col("col.climb_rate"),
-                                                   col("col.latitude"),
-                                                   col("col.longitude"),
-                                                   col("col.pressure_altitude"));
-
-    //String saveParPath = "/java_output/KPHX/output_data.parquet";
-    String saveCsvPath = "/java_output/" + airport + "/output_data.csv";
-
-      //saveToParquet(reducedFlightData, saveParPath);
-      saveToCsv(data, saveCsvPath);
-
+    if( LOCAL ) {
+      ttFile =
+          "hdfs://localhost:9000/user/karltrout/DATA/03302017/TT/ThreadedTrack_2.3.0-F_ASSOCIATED_20170330_part-00072.avro";
     }
 
-    private static void init(SparkSession spark) {
+    Dataset<Row> threadedTrackDataSet = spark.read().format("com.databricks.spark.avro").load(ttFile);
+    Dataset<Row> allFlightColumns = threadedFlightDS.join(threadedTrackDataSet, "tt_id");
+
+    Dataset<Row>
+        flightData =
+        allFlightColumns.select(col("tt_id"),
+                                col("threaded_track"),
+                                col("threaded_metadata.aircraft_id").alias("acid"),
+                                col("threaded_metadata.aircraft_type").alias("acType"),
+                                col("threaded_metadata.departure_airport").alias("depArpt"))
+            .filter("threaded_metadata.departure_airport like '%" + airport + "%'");
+
+    Dataset<Row> reducedFlightData = flightData
+        .withColumn("Altitudes", callUDF("udfReduceHits", col("threaded_track")))
+        .select(
+            col("tt_id"),
+            col("acType"),
+            col("acid"),
+            col("depArpt"),
+            col("Altitudes"),
+            explode(col("Altitudes"))
+        );
+
+    Dataset<Row> data = reducedFlightData.select(col("tt_id"),
+                                                 col("acid"),
+                                                 col("acType"),
+                                                 col("depArpt"),
+                                                 col("col.time"),
+                                                 col("col.climb_rate"),
+                                                 col("col.latitude"),
+                                                 col("col.longitude"),
+                                                 col("col.pressure_altitude"));
+
+    if (outputType.equalsIgnoreCase("parquet")) {
+      String saveParPath = rootSavePath + datePath + airport + "/output_data.parquet";
+      saveToParquet(reducedFlightData, saveParPath);
+    } else {
+      String saveCsvPath = rootSavePath + datePath + airport + "/output_data.csv";
+      saveToCsv(data, saveCsvPath);
+    }
+  }
+
+  /**
+   * Reads in the Properties file and sets the necessary fields.
+   *
+   * @param propertiesFilePath String path to the file.
+   */
+  private static void assignFields(String propertiesFilePath) {
+    try {
+      Properties properties = Helper.loadProperties(propertiesFilePath);
+
+      rootSavePath    = properties.getProperty("rootSavePath");
+      outputType      = properties.getProperty("outputType");
+      airport         = properties.getProperty("airport");
+      inMONTH         = Integer.parseInt(properties.getProperty("inMONTH"));
+      inYEAR          = Integer.parseInt(properties.getProperty("inYEAR"));
+      inDAY           = Integer.parseInt(properties.getProperty("inDAY"));
+      threadedTrack   = properties.getProperty("threadedTrack");
+      threadedFlight  = properties.getProperty("threadedFlight");
+      TT_FILE_NAME    = properties.getProperty("TT_FILE_NAME");
+      TF_FILE_NAME    = properties.getProperty("TF_FILE_NAME");
+      LOCAL           = Boolean.parseBoolean(properties.getProperty("LOCAL"));
+    }
+    catch (IOException exception) {
+      logger.error(exception.getMessage());
+      logger.error("Properties file " + propertiesFilePath + " does not exist or is not configured properly.");
+      logger.info("Usage: FlightData -p /path/to/parameters.file.");
+      System.exit(0);
+    }
+  }
+
+  /**
+   * Init the Spark data structures and load User Defined Functions.
+   * @param spark the current Spark Session
+   */
+  private static void init(SparkSession spark) {
 
       spark.udf().register("udfMaxAlt", (Dataset<Row> data) -> max(col("pressure_alt")), DataTypes.DoubleType);
 
@@ -138,20 +190,30 @@ public class FlightData {
       ArrayType climb = DataTypes.createArrayType(struct, true);
 
 
-      spark.udf().register("udfReduceHits", ( WrappedArray data ) -> collectAndMinimizeClimbData(data), climb);
+      spark.udf().register(
+          "udfReduceHits", (UDF1<WrappedArray, Object>) FlightData::collectAndMinimizeClimbData, climb);
 
     }
 
-
-    private static WrappedArray collectAndMinimizeClimbData(WrappedArray wrappedArray ) {
+  /**
+   *  a UDF (User Defined Function) for spark which is used to adapt or modify data in Spark.
+   *  The idea here is to take all of the track hits for a flight and process them into just the change points
+   *  necessary to represent the accession rate.
+   *  Each point is analysed and compared to its past values and vertical direction.
+   *  it determines if we are ascending, leveling or descending. if there is a change, the point is saved as well as the last know
+   *  point before the change. this allows us to represent the change as a bezier curve for the change.
+   *
+   * @param wrappedArray The Data array to process. ( I know, this doesn't add value! ).
+   * @return  processed array.
+   */
+  private static WrappedArray collectAndMinimizeClimbData(WrappedArray wrappedArray ) {
 
       boolean isClimbing = false;
       int levelCnt = 0;
       int cruiseCnt = 0;
       int maxCruiseCnt = 20;
       int accentStartInd = 0;
-     // int recIdx = 5;
-      int maxAlt = 0;
+
       //Starting record is in the 5th spot we will look back 5 records to get an indication of our direction
       ArrayList<Row> rowsArray =  new ArrayList<>();
       for (int recIdx = 5; recIdx < wrappedArray.size() -5  ; recIdx++) {
@@ -168,7 +230,7 @@ public class FlightData {
         Double preAlt = (curAlt - (Double)((Row) wrappedArray.apply(recIdx - 5)).getDouble(3));
         Double nextAlt = (Double) ((Row) wrappedArray.apply(recIdx + 5)).getDouble(3) - curAlt;
 
-        //Assending Check
+        //Ascending Check
         if (nextAlt > 0.0 && nextAlt >= (preAlt * 0.65)) {
 
           if (levelCnt > 0) {
@@ -202,8 +264,8 @@ public class FlightData {
         else if (nextAlt > 0.0 && nextAlt < (preAlt * .65)) {
 
           if (levelCnt == 0 && accentStartInd != 0) {
-            int oneThird = (int) ((recIdx - accentStartInd) * 1 / 3);
-            int twoThirds = (int) ((recIdx - accentStartInd) * 2 / 3);
+            int oneThird = (recIdx - accentStartInd) / 3;
+            int twoThirds = (recIdx - accentStartInd) * 2 / 3;
             rowsArray.add(((Row) wrappedArray.apply(recIdx - twoThirds)));
             rowsArray.add(((Row) wrappedArray.apply(recIdx - oneThird)));
             accentStartInd = 0;
@@ -226,7 +288,7 @@ public class FlightData {
           }
 
           cruiseCnt += 1;
-          if (isClimbing && cruiseCnt > maxCruiseCnt) {
+          if ( cruiseCnt > maxCruiseCnt ) {
             rowsArray.add(((Row) wrappedArray.apply(recIdx - maxCruiseCnt - 1)));
             break;
           }

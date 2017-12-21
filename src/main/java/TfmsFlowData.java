@@ -26,6 +26,7 @@ public class TfmsFlowData {
   private static Properties properties = new Properties();
   private static String hadoopInputURI;
   private static String rootSavePath;
+  private static String fileNameConstant;
 
 
   public static void main(String[] args) {
@@ -46,6 +47,10 @@ public class TfmsFlowData {
       System.exit(0);
     }
 
+    Calendar calendar = Calendar.getInstance();
+    calendar.add(Calendar.DAY_OF_MONTH, -1);
+    String hadoopImportFilesPathString = hadoopInputURI + createFileNamePatternFrom(calendar)+"*";
+
     SparkSession spark = SparkSession.builder().getOrCreate();
 
     HashMap<String, String> options = new HashMap<>();
@@ -56,7 +61,7 @@ public class TfmsFlowData {
             .format("com.databricks.spark.xml")
             .options(options)
             .schema(TfmsFlowMessageSchema.getSchema())
-            .load(hadoopInputURI)
+            .load(hadoopImportFilesPathString)
             .cache();
 
     extractTrackInformationMessages(df);
@@ -274,10 +279,19 @@ public class TfmsFlowData {
       properties.load(parametersFile);
       hadoopInputURI = properties.getProperty("hadoopInputURI");
       rootSavePath = properties.getProperty("rootSavePath");
+      fileNameConstant = properties.getProperty("fileNameConstant", "TFMS_FLOW_");
       if ( hadoopInputURI == null || rootSavePath == null)
         throw new IOException("Properties File is incomplete.");
     }
 
+  }
+
+  private static String createPathFrom(Calendar calendar) {
+    return String.format("/%1$tY/%1$tm/%1$td/", calendar);
+  }
+
+  private static String createFileNamePatternFrom(Calendar calendar){
+    return String.format(fileNameConstant+"%1$tY%1$tm%1$td", calendar);
   }
 
   private static void saveToCsv(Dataset<Row> data, String pathToSave) {
@@ -293,23 +307,6 @@ public class TfmsFlowData {
         .mode(SaveMode.Overwrite)
         .save(rootSavePath + datePath + pathToSave);
 
-  }
-
-  private static String createPathFrom(Calendar calendar) {
-
-    StringBuffer datePathBuilder = new StringBuffer();
-    datePathBuilder
-        .append("/").append(calendar.get(Calendar.YEAR))
-        .append("/").append(calendar.get(Calendar.MONTH) +1 )
-        .append("/").append(calendar.get(Calendar.DAY_OF_MONTH))
-        .append("/");
-
-    return datePathBuilder.toString();
-
-  }
-
-  private static void saveToParquet(Dataset<Row> data, String pathToSave){
-    data.write().mode(SaveMode.Overwrite).parquet(pathToSave);
   }
 
 }

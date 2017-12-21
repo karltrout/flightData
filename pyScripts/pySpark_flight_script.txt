@@ -1,0 +1,65 @@
+> bash-4.3$ pySpark  --num-executors 3 --driver-memory 4g --executor-memory 2g --executor-cores 1 --packages com.databricks:spark-avro_2.11:3.2.0 --conf spark.local.dir='/home/tmp/'
+>>>
+from pyspark.sql.types import *
+from pyspark.sql.functions import col, udf, explode
+tfdf = spark.read.format("com.databricks.spark.avro").load("hdfs://localhost:9000/user/karltrout/DATA/03302017/TF/ThreadedFlight_2.3.0-F_ASSOCIATED_20170330_part-00072.avro")
+ttdf = spark.read.format("com.databricks.spark.avro").load("hdfs://localhost:9000/user/karltrout/DATA/03302017/TT/ThreadedTrack_2.3.0-F_ASSOCIATED_20170330_part-00072.avro")
+tfdf = tfdf.dropna(how='any',subset=["threaded_metadata.departure_airport","threaded_metadata.aircraft_type"])
+flightDf = ttdf.join(tfdf, ttdf.tt_id == tfdf.tt_id)
+flightDf = flightDf.select(ttdf.tt_id, ttdf.threaded_track,tfdf.threaded_metadata['aircraft_id'].alias("acid"), tfdf.threaded_metadata['aircraft_type'].alias("actype"), tfdf.threaded_metadata['departure_airport'].alias("darpt"), tfdf.threaded_metadata['arrival_airport'].alias("aarpt"))
+df = flightDf.where("darpt == 'PHX'").persist()
+
+// load in flightData.py
+
+udfmaxAlt=udf(maximum_alt, DoubleType())
+
+udfReduceHits=udf(collectAndMinimalizeClimbData,ArrayType(StructType([
+StructField("time",LongType(),True),
+StructField("latitude",DoubleType(),True),
+StructField("longitude",DoubleType(),True),
+StructField("pressure_altitude",DoubleType(),True),
+StructField("along_track_distance",DoubleType(),True),
+StructField("ground_speed",DoubleType(),True),
+StructField("track_heading",DoubleType(),True),
+StructField("track_curvature",DoubleType(),True),
+StructField("ground_acceleration",DoubleType(),True),
+StructField("climb_rate",DoubleType(),True),
+StructField("cross_track_residual",DoubleType(),True),
+StructField("along_track_residual",DoubleType(),True),
+StructField("vertical_track_residual",DoubleType(),True),
+StructField("cross_track_bias",DoubleType(),True),
+StructField("along_track_bias",DoubleType(),True),
+StructField("vertical_track_bias",DoubleType(),True),
+StructField("active_sensors",ArrayType(StringType(),True),True)
+])))
+df.withColumn("Max", udfmaxAlt("threaded_track")).withColumn("MinimiseddAlt", udfReduceHits("threaded_track")).select("tt_id","acid", "actype","darpt", "aarpt", "Max", "MinimiseddAlt").show()
+
+reducedFlightData=df.withColumn("Max", udfmaxAlt("threaded_track")).withColumn("MinimiseddAlt", udfReduceHits("threaded_track")).select("tt_id","acid", "actype","darpt", "aarpt", "Max", explode("MinimiseddAlt"))
+reducedFlightData.select("tt_id","acid", "actype", "darpt", "aarpt", "Max", "col.time", "col.latitude","col.longitude", "col.pressure_altitude").write.format('com.databricks.spark.csv').save('/tmp/reducedAAL424E')
+
+
+
+--------------------------------------------------------------------------------------------------------------------
+Row(time=1490915815000, latitude=33.438157869299346, longitude=-111.99529877819128, pressure_altitude=None, along_track_distance=0.0, ground_speed=2.0832935323206527e-12, track_heading=182.79295086003347, track_curvature=0.0, ground_acceleration=0.0, climb_rate=None, cross_track_residual=0.0, along_track_residual=2.052407016334891e-15, vertical_track_residual=8.600217038295209e-12, cross_track_bias=0.0, along_track_bias=0.0, vertical_track_bias=None, active_sensors=[u'ASDEX:PHX'])
+
+
+time=1490910201000,
+latitude=33.43768373160606,
+longitude=-112.00072150424138,
+pressure_altitude=None,
+along_track_distance=603.3401247949456,
+ground_speed=6.225907268516863,
+track_heading=173.27347280814166,
+track_curvature=-2.4027313358186677,
+ground_acceleration=-94.50780119787358,
+climb_rate=None,
+cross_track_residual=0.0001858464271843773,
+along_track_residual=0.0009639415518690562,
+vertical_track_residual=1.6362302374728835e-09,
+cross_track_bias=0.0,
+along_track_bias=0.0,
+vertical_track_bias=None,
+active_sensors=[u'ASDEX:PHX']
+
+df = spark.read.parquet("/java_output/KPHX/output_data.csv")
+df.collect()
