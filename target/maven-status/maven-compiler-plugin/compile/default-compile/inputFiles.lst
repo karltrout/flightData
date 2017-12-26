@@ -1,5 +1,8 @@
+/data/java/flightData/src/main/java/ExamplesTest.java
 /data/java/flightData/src/main/java/FlightData.java
 /data/java/flightData/src/main/java/csv/CsvReader.java
+/data/java/flightData/src/main/java/Helper.java
+/data/java/flightData/src/main/java/KML/Csv2Kml.java
 /data/java/flightData/src/main/java/graph/GraphAssent.java
 /data/java/flightData/src/main/java/TfmsFlowData.java
 /data/java/flightData/src/main/java/JDBCExample.java
