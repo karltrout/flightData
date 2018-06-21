@@ -1,5 +1,6 @@
 import com.databricks.spark.avro.SchemaConverters;
 
+import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.types.ArrayType;
 import org.apache.spark.sql.types.DataTypes;
 import org.apache.spark.sql.types.Metadata;
@@ -4513,4 +4514,10 @@ public class TfmsFlowMessageSchema {
   public static final StructType getSchema() {
     return structType;
   }
+
+  public static void main(String[] args){
+    StructType structType = getSchema();
+    System.out.println(structType.prettyJson());
+  }
+
 }
